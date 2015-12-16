@@ -7,7 +7,8 @@ from skimage.feature import hog
 import json
 import cv2
 from gmm_module import *
-save_crop_dir =  'Train_high_inference_wholeGMM/'
+save_crop_dir =  'Train_high_inference_HOG/'
+block_size =10
 resize_x = 300
 resize_y = 150
 
@@ -15,7 +16,6 @@ resize_y = 150
 Vl = pickle.load(open('pickle_file/save_Vl_dict_train_ori.p','rb'))
 #available vehicles used for training
 available_list = ['V1']
-v_num_GMM = {}
 V1_clean = [7,10,15,17,18]
 V1_HOG = [[] for i in range(len(V1_clean))]
 M_max = 100
@@ -25,37 +25,39 @@ for v_num in available_list:
     for v_img in V1_clean:
         GMM_patch = []
         v_resized = cv2.resize(Vl[v_num][0][v_img],(resize_x,resize_y))
-        #put 5*5*3 images in diff lists
-        for k in range(1,resize_x/5+1):
-            for kk in range(1,resize_y/5+1):
+        #put block_size*block_size*3 images in diff lists
+        for k in range(1,resize_x/block_size+1):
+            for kk in range(1,resize_y/block_size+1):
                 #turn into grey
-                gray_image = cv2.cvtColor(v_resized[5*(kk-1):5*kk,5*(k-1):5*k],
+                gray_image = cv2.cvtColor(v_resized[block_size*(kk-1):block_size*kk,
+                                                    block_size*(k-1):block_size*k],
                                           cv2.COLOR_BGR2GRAY)
                 #get hog features
-                V1_HOG[temp_count].append(hog(gray_image))
+                V1_HOG[temp_count].append(hog(gray_image,pixels_per_cell=(5, 5),
+                                              cells_per_block=(1, 1)))
         temp_count+=1
 del Vl
 
 print 'save GMM models\n'
-pickle.dump(v_num_GMM,open('V1_clean_GMM.p','wb'))
+pickle.dump(V1_HOG,open('V1_clean_HOG.p','wb'))
 
 #make inference on the high occluded images and save modified figure
 Vh = pickle.load(open('pickle_file/save_Vh_dict_train_ori.p','rb'))
 Vh_blackout = {}
-dist_list = np.zeros((resize_x*resize_y/(5*5),3))
+dist_list = np.zeros((resize_x*resize_y/(block_size*block_size),3))
 for v_num in available_list:
-
     for v_img in range(len(Vh[v_num][0])):
         re_img = cv2.resize(Vh[v_num][0][v_img],(resize_x,resize_y))
         count = 0
-        for k in range(1,resize_x/5+1):
-            for kk in range(1,resize_y/5+1):
+        for k in range(1,resize_x/block_size+1):
+            for kk in range(1,resize_y/block_size+1):
                 min_score = float('inf')
                 temp_key = str(kk-1)+'_'+str(k-1)
                 for prototype in V1_HOG:
                     #turn into grey
-                    img_hog = hog(cv2.cvtColor(re_img[5*(kk-1):5*kk,5*(k-1):5*k],
-                                               cv2.COLOR_BGR2GRAY))
+                    img_hog = hog(cv2.cvtColor(
+                    re_img[block_size*(kk-1):block_size*kk,block_size*(k-1):block_size*k],
+                        cv2.COLOR_BGR2GRAY),pixels_per_cell=(5, 5),cells_per_block=(1, 1))
                     #get the least deviation over all proto
                     temp = np.linalg.norm(img_hog-prototype[count])
                     if temp<min_score:
@@ -69,12 +71,12 @@ for v_num in available_list:
         #sort p_val_list
         dist_list = dist_list[dist_list[:,0].argsort()]
         temp_occ = Vh[v_num][1][v_img]
-        covered_num = int(resize_x*resize_y/(5*5)*temp_occ)
+        covered_num = int(resize_x*resize_y/(block_size*block_size)*temp_occ)
         #set the first covered_num_block to zeros
         for k in range(covered_num):
-            d1 = p_val_list[covered_num-1-k][1]
-            d2 = p_val_list[covered_num-1-k][2]
-            re_img[5*(d1-1):5*d1,5*(d2-1):5*d2] = 0
+            d1 = dist_list[covered_num-1-k][1]
+            d2 = dist_list[covered_num-1-k][2]
+            re_img[block_size*(d1-1):block_size*d1,block_size*(d2-1):block_size*d2] = 0
         #save the modified image in a dictionary
         if v_num not in Vh_blackout.keys():
             Vh_blackout[v_num] = [[],[],[]]
@@ -83,4 +85,4 @@ for v_num in available_list:
         Vh_blackout[v_num][2].extend([Vh[v_num][2][v_img]])
         #save the modified image in a file for visualization
         cv2.imwrite(save_crop_dir+v_num+'_'+str(v_img)+'.jpg',re_img)
-pickle.dump(Vh_blackout,open('V1h_blackout.p','wb'))
+pickle.dump(Vh_blackout,open('V1h_hog_blackout.p','wb'))
